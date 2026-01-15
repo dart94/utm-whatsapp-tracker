@@ -1,0 +1,54 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+model Click {
+  id            String   @id @default(cuid())
+  phoneNumber   String   @db.VarChar(20)
+  utmSource     String?  @db.VarChar(100)
+  utmMedium     String?  @db.VarChar(100)
+  utmCampaign   String?  @db.VarChar(100)
+  utmContent    String?  @db.VarChar(200)
+  utmTerm       String?  @db.VarChar(200)
+  
+  // Metadata
+  ipAddress     String?  @db.VarChar(45)
+  userAgent     String?  @db.Text
+  referer       String?  @db.Text
+  
+  // Kommo tracking
+  kommoLeadId   String?  @db.VarChar(50)
+  kommoStatus   String?  @default("pending") @db.VarChar(20)
+  kommoError    String?  @db.Text
+  
+  // Timestamps
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  
+  @@index([phoneNumber])
+  @@index([utmCampaign])
+  @@index([createdAt])
+  @@map("clicks")
+}
+
+model Campaign {
+  id              String   @id @default(cuid())
+  name            String   @unique @db.VarChar(100)
+  phoneNumber     String   @db.VarChar(20)
+  description     String?  @db.Text
+  isActive        Boolean  @default(true)
+  
+  // UTM defaults
+  defaultUtmSource    String? @db.VarChar(100)
+  defaultUtmMedium    String? @db.VarChar(100)
+  
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  
+  @@map("campaigns")
+}
