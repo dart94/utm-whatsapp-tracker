@@ -32,15 +32,15 @@ class KommoService {
       const client = kommoConfig.getClient();
       const fields = kommoConfig.getFields();
 
-      logger.info("Lead data received:", {
-        phoneNumber,
-        utmSource,
-        utmMedium,
-        utmCampaign,
-        utmContent,
-        utmTerm,
-      });
-      logger.info("Kommo field IDs:", fields);
+      // Log con strings simples
+      console.log("=== KOMMO CREATE LEAD START ===");
+      console.log("Phone:", phoneNumber);
+      console.log("UTM Source:", utmSource);
+      console.log("UTM Medium:", utmMedium);
+      console.log("UTM Campaign:", utmCampaign);
+      console.log("UTM Content:", utmContent);
+      console.log("UTM Term:", utmTerm);
+      console.log("Field IDs:", JSON.stringify(fields));
 
       // PASO 1: Crear el lead sin custom fields
       const createPayload = [
@@ -67,10 +67,7 @@ class KommoService {
         },
       ];
 
-      logger.info(
-        "Creating lead with payload:",
-        JSON.stringify(createPayload, null, 2)
-      );
+      console.log("Create payload:", JSON.stringify(createPayload));
 
       const createResponse = await this._makeRequestWithRetry(() =>
         client.post("/leads", createPayload)
@@ -82,14 +79,14 @@ class KommoService {
         throw new Error("No lead ID returned from Kommo");
       }
 
-      logger.info("✅ Lead created successfully, ID:", leadId);
+      console.log("✅ Lead created, ID:", leadId);
 
       // PASO 2: Preparar custom fields para PATCH
       const customFields = [];
 
       if (fields.utmSource && utmSource) {
         const fieldId = parseInt(fields.utmSource, 10);
-        logger.info(`Adding UTM Source: ${fieldId} = ${utmSource}`);
+        console.log("Adding field:", fieldId, "=", utmSource);
         customFields.push({
           field_id: fieldId,
           values: [{ value: utmSource }],
@@ -98,7 +95,7 @@ class KommoService {
 
       if (fields.utmMedium && utmMedium) {
         const fieldId = parseInt(fields.utmMedium, 10);
-        logger.info(`Adding UTM Medium: ${fieldId} = ${utmMedium}`);
+        console.log("Adding field:", fieldId, "=", utmMedium);
         customFields.push({
           field_id: fieldId,
           values: [{ value: utmMedium }],
@@ -107,7 +104,7 @@ class KommoService {
 
       if (fields.utmCampaign && utmCampaign) {
         const fieldId = parseInt(fields.utmCampaign, 10);
-        logger.info(`Adding UTM Campaign: ${fieldId} = ${utmCampaign}`);
+        console.log("Adding field:", fieldId, "=", utmCampaign);
         customFields.push({
           field_id: fieldId,
           values: [{ value: utmCampaign }],
@@ -116,7 +113,7 @@ class KommoService {
 
       if (fields.utmContent && utmContent) {
         const fieldId = parseInt(fields.utmContent, 10);
-        logger.info(`Adding UTM Content: ${fieldId} = ${utmContent}`);
+        console.log("Adding field:", fieldId, "=", utmContent);
         customFields.push({
           field_id: fieldId,
           values: [{ value: utmContent }],
@@ -125,14 +122,14 @@ class KommoService {
 
       if (fields.utmTerm && utmTerm) {
         const fieldId = parseInt(fields.utmTerm, 10);
-        logger.info(`Adding UTM Term: ${fieldId} = ${utmTerm}`);
+        console.log("Adding field:", fieldId, "=", utmTerm);
         customFields.push({
           field_id: fieldId,
           values: [{ value: utmTerm }],
         });
       }
 
-      logger.info(`Total custom fields to add: ${customFields.length}`);
+      console.log("Total fields to update:", customFields.length);
 
       // PASO 3: Actualizar con PATCH si hay custom fields
       if (customFields.length > 0) {
@@ -140,29 +137,30 @@ class KommoService {
           custom_fields_values: customFields,
         };
 
-        logger.info("PATCH payload:", JSON.stringify(updatePayload, null, 2));
-        logger.info(`Updating lead ${leadId} with UTM fields...`);
+        console.log("PATCH URL:", `/leads/${leadId}`);
+        console.log("PATCH payload:", JSON.stringify(updatePayload));
 
         try {
           await this._makeRequestWithRetry(() =>
             client.patch(`/leads/${leadId}`, updatePayload)
           );
 
-          logger.info("✅ Lead updated with UTM data successfully");
+          console.log("✅ PATCH successful");
         } catch (patchError) {
-          logger.error("❌ PATCH failed:", patchError.message);
+          console.log("❌ PATCH FAILED");
+          console.log("Error message:", patchError.message);
           if (patchError.response) {
-            logger.error("PATCH error status:", patchError.response.status);
-            logger.error(
-              "PATCH error data:",
-              JSON.stringify(patchError.response.data, null, 2)
+            console.log("Status:", patchError.response.status);
+            console.log(
+              "Error data:",
+              JSON.stringify(patchError.response.data)
             );
           }
           throw patchError;
         }
-      } else {
-        logger.warn("No custom fields to update");
       }
+
+      logger.info("Lead created and updated successfully:", leadId);
 
       return {
         success: true,
@@ -170,18 +168,13 @@ class KommoService {
         data: createResponse.data,
       };
     } catch (error) {
-      logger.error("❌ Error in createLead:", error.message);
+      console.log("=== ERROR CATCH BLOCK ===");
+      console.log("Error message:", error.message);
       if (error.response) {
-        logger.error("Response status:", error.response.status);
-        logger.error(
-          "Response data:",
-          JSON.stringify(error.response.data, null, 2)
-        );
-        logger.error(
-          "Response headers:",
-          JSON.stringify(error.response.headers, null, 2)
-        );
+        console.log("Status code:", error.response.status);
+        console.log("Error details:", JSON.stringify(error.response.data));
       }
+      console.log("=== END ERROR ===");
 
       return {
         success: false,
