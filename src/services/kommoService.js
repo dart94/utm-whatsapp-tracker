@@ -14,97 +14,120 @@ class KommoService {
    * @returns {Promise<Object>}
    */
   async createLead(leadData) {
-    if (!kommoConfig.isConfigured()) {
-      logger.warn('Kommo not configured, skipping lead creation');
-      return { success: false, error: 'Kommo not configured' };
-    }
+  if (!kommoConfig.isConfigured()) {
+    logger.warn('Kommo not configured, skipping lead creation');
+    return { success: false, error: 'Kommo not configured' };
+  }
 
-    const { phoneNumber, utmSource, utmMedium, utmCampaign, utmContent, utmTerm } = leadData;
+  const { phoneNumber, utmSource, utmMedium, utmCampaign, utmContent, utmTerm } = leadData;
 
-    try {
-      const client = kommoConfig.getClient();
-      const fields = kommoConfig.getFields();
+  try {
+    const client = kommoConfig.getClient();
+    const fields = kommoConfig.getFields();
 
-      // Preparar custom fields
-      const customFields = [];
+    logger.info('Kommo fields configuration:', fields);
 
-      if (fields.utmSource && utmSource) {
+    // Preparar custom fields - SOLO agregar si el field_id existe
+    const customFields = [];
+
+    if (fields.utmSource && utmSource) {
+      const fieldId = parseInt(fields.utmSource, 10);
+      if (!isNaN(fieldId)) {
         customFields.push({
-          field_id: parseInt(fields.utmSource),
+          field_id: fieldId,
           values: [{ value: utmSource }]
         });
       }
+    }
 
-      if (fields.utmMedium && utmMedium) {
+    if (fields.utmMedium && utmMedium) {
+      const fieldId = parseInt(fields.utmMedium, 10);
+      if (!isNaN(fieldId)) {
         customFields.push({
-          field_id: parseInt(fields.utmMedium),
+          field_id: fieldId,
           values: [{ value: utmMedium }]
         });
       }
+    }
 
-      if (fields.utmCampaign && utmCampaign) {
+    if (fields.utmCampaign && utmCampaign) {
+      const fieldId = parseInt(fields.utmCampaign, 10);
+      if (!isNaN(fieldId)) {
         customFields.push({
-          field_id: parseInt(fields.utmCampaign),
+          field_id: fieldId,
           values: [{ value: utmCampaign }]
         });
       }
+    }
 
-      if (fields.utmContent && utmContent) {
+    if (fields.utmContent && utmContent) {
+      const fieldId = parseInt(fields.utmContent, 10);
+      if (!isNaN(fieldId)) {
         customFields.push({
-          field_id: parseInt(fields.utmContent),
+          field_id: fieldId,
           values: [{ value: utmContent }]
         });
       }
+    }
 
-      if (fields.utmTerm && utmTerm) {
+    if (fields.utmTerm && utmTerm) {
+      const fieldId = parseInt(fields.utmTerm, 10);
+      if (!isNaN(fieldId)) {
         customFields.push({
-          field_id: parseInt(fields.utmTerm),
+          field_id: fieldId,
           values: [{ value: utmTerm }]
         });
       }
-
-      // Preparar el payload del lead
-      const payload = [{
-        name: `Lead de ${utmCampaign || 'WhatsApp'}`,
-        custom_fields_values: customFields,
-        _embedded: {
-          contacts: [{
-            custom_fields_values: [{
-              field_code: 'PHONE',
-              values: [{ value: phoneNumber, enum_code: 'WORK' }]
-            }]
-          }],
-          tags: utmCampaign ? [{
-            name: utmCampaign
-          }] : []
-        }
-      }];
-
-      logger.info('Creating lead in Kommo:', { phoneNumber, utmCampaign });
-
-      const response = await this._makeRequestWithRetry(
-        () => client.post('/leads', payload)
-      );
-
-      const leadId = response.data._embedded?.leads?.[0]?.id;
-
-      logger.info('Lead created successfully in Kommo:', { leadId });
-
-      return {
-        success: true,
-        leadId: leadId?.toString(),
-        data: response.data
-      };
-
-    } catch (error) {
-      logger.error('Error creating lead in Kommo:', error.message);
-      
-      return {
-        success: false,
-        error: error.response?.data?.detail || error.message
-      };
     }
+
+    logger.info('Custom fields to send:', customFields);
+
+    // Preparar el payload del lead
+    const payload = [{
+      name: `Lead de ${utmCampaign || 'WhatsApp'}`,
+      custom_fields_values: customFields,
+      _embedded: {
+        contacts: [{
+          custom_fields_values: [{
+            field_code: 'PHONE',
+            values: [{ value: phoneNumber, enum_code: 'WORK' }]
+          }]
+        }],
+        tags: utmCampaign ? [{
+          name: utmCampaign
+        }] : []
+      }
+    }];
+
+    logger.info('Creating lead in Kommo:', { phoneNumber, utmCampaign });
+    logger.debug('Full payload:', JSON.stringify(payload, null, 2));
+
+    const response = await this._makeRequestWithRetry(
+      () => client.post('/leads', payload)
+    );
+
+    const leadId = response.data._embedded?.leads?.[0]?.id;
+
+    logger.info('Lead created successfully in Kommo:', { leadId });
+
+    return {
+      success: true,
+      leadId: leadId?.toString(),
+      data: response.data
+    };
+
+  } catch (error) {
+    logger.error('Error creating lead in Kommo:', error.message);
+    if (error.response) {
+      logger.error('Kommo error response:', JSON.stringify(error.response.data, null, 2));
+    }
+    
+    return {
+      success: false,
+      error: error.response?.data?.detail || error.response?.data || error.message
+    };
   }
+}
 
   /**
    * Buscar leads por teléfono
