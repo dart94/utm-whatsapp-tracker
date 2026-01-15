@@ -32,7 +32,15 @@ class KommoService {
       const client = kommoConfig.getClient();
       const fields = kommoConfig.getFields();
 
-      logger.info("Creating lead in Kommo:", { phoneNumber, utmCampaign });
+      logger.info("Lead data received:", {
+        phoneNumber,
+        utmSource,
+        utmMedium,
+        utmCampaign,
+        utmContent,
+        utmTerm,
+      });
+      logger.info("Kommo field IDs:", fields);
 
       // PASO 1: Crear el lead sin custom fields
       const createPayload = [
@@ -59,6 +67,11 @@ class KommoService {
         },
       ];
 
+      logger.info(
+        "Creating lead with payload:",
+        JSON.stringify(createPayload, null, 2)
+      );
+
       const createResponse = await this._makeRequestWithRetry(() =>
         client.post("/leads", createPayload)
       );
@@ -69,62 +82,86 @@ class KommoService {
         throw new Error("No lead ID returned from Kommo");
       }
 
-      logger.info("Lead created, ID:", leadId);
+      logger.info("✅ Lead created successfully, ID:", leadId);
 
       // PASO 2: Preparar custom fields para PATCH
       const customFields = [];
 
       if (fields.utmSource && utmSource) {
+        const fieldId = parseInt(fields.utmSource, 10);
+        logger.info(`Adding UTM Source: ${fieldId} = ${utmSource}`);
         customFields.push({
-          field_id: parseInt(fields.utmSource, 10),
+          field_id: fieldId,
           values: [{ value: utmSource }],
         });
       }
 
       if (fields.utmMedium && utmMedium) {
+        const fieldId = parseInt(fields.utmMedium, 10);
+        logger.info(`Adding UTM Medium: ${fieldId} = ${utmMedium}`);
         customFields.push({
-          field_id: parseInt(fields.utmMedium, 10),
+          field_id: fieldId,
           values: [{ value: utmMedium }],
         });
       }
 
       if (fields.utmCampaign && utmCampaign) {
+        const fieldId = parseInt(fields.utmCampaign, 10);
+        logger.info(`Adding UTM Campaign: ${fieldId} = ${utmCampaign}`);
         customFields.push({
-          field_id: parseInt(fields.utmCampaign, 10),
+          field_id: fieldId,
           values: [{ value: utmCampaign }],
         });
       }
 
       if (fields.utmContent && utmContent) {
+        const fieldId = parseInt(fields.utmContent, 10);
+        logger.info(`Adding UTM Content: ${fieldId} = ${utmContent}`);
         customFields.push({
-          field_id: parseInt(fields.utmContent, 10),
+          field_id: fieldId,
           values: [{ value: utmContent }],
         });
       }
 
       if (fields.utmTerm && utmTerm) {
+        const fieldId = parseInt(fields.utmTerm, 10);
+        logger.info(`Adding UTM Term: ${fieldId} = ${utmTerm}`);
         customFields.push({
-          field_id: parseInt(fields.utmTerm, 10),
+          field_id: fieldId,
           values: [{ value: utmTerm }],
         });
       }
 
+      logger.info(`Total custom fields to add: ${customFields.length}`);
+
       // PASO 3: Actualizar con PATCH si hay custom fields
       if (customFields.length > 0) {
-        logger.info("Updating lead with UTM fields:", {
-          leadId,
-          fieldsCount: customFields.length,
-        });
-
         const updatePayload = {
           custom_fields_values: customFields,
         };
 
-        await this._makeRequestWithRetry(() =>
-          client.patch(`/leads/${leadId}`, updatePayload)
-        );
+        logger.info("PATCH payload:", JSON.stringify(updatePayload, null, 2));
+        logger.info(`Updating lead ${leadId} with UTM fields...`);
 
-        logger.info("Lead updated with UTM data successfully");
+        try {
+          await this._makeRequestWithRetry(() =>
+            client.patch(`/leads/${leadId}`, updatePayload)
+          );
+
+          logger.info("✅ Lead updated with UTM data successfully");
+        } catch (patchError) {
+          logger.error("❌ PATCH failed:", patchError.message);
+          if (patchError.response) {
+            logger.error("PATCH error status:", patchError.response.status);
+            logger.error(
+              "PATCH error data:",
+              JSON.stringify(patchError.response.data, null, 2)
+            );
+          }
+          throw patchError;
+        }
+      } else {
+        logger.warn("No custom fields to update");
       }
 
       return {
@@ -133,11 +170,16 @@ class KommoService {
         data: createResponse.data,
       };
     } catch (error) {
-      logger.error("Error creating/updating lead in Kommo:", error.message);
+      logger.error("❌ Error in createLead:", error.message);
       if (error.response) {
+        logger.error("Response status:", error.response.status);
         logger.error(
-          "Kommo error:",
+          "Response data:",
           JSON.stringify(error.response.data, null, 2)
+        );
+        logger.error(
+          "Response headers:",
+          JSON.stringify(error.response.headers, null, 2)
         );
       }
 
