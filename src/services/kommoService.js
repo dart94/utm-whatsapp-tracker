@@ -32,111 +32,111 @@ class KommoService {
       const client = kommoConfig.getClient();
       const fields = kommoConfig.getFields();
 
-      logger.info("Kommo fields configuration:", fields);
+      logger.info("Creating lead in Kommo:", { phoneNumber, utmCampaign });
 
-      // Preparar custom fields - SOLO agregar si el field_id existe
-      const customFields = [];
-
-      if (fields.utmSource && utmSource) {
-        const fieldId = parseInt(fields.utmSource, 10);
-        if (!isNaN(fieldId)) {
-          customFields.push({
-            field_id: fieldId,
-            values: [{ value: utmSource }],
-          });
-        }
-      }
-
-      if (fields.utmMedium && utmMedium) {
-        const fieldId = parseInt(fields.utmMedium, 10);
-        if (!isNaN(fieldId)) {
-          customFields.push({
-            field_id: fieldId,
-            values: [{ value: utmMedium }],
-          });
-        }
-      }
-
-      if (fields.utmCampaign && utmCampaign) {
-        const fieldId = parseInt(fields.utmCampaign, 10);
-        if (!isNaN(fieldId)) {
-          customFields.push({
-            field_id: fieldId,
-            values: [{ value: utmCampaign }],
-          });
-        }
-      }
-
-      if (fields.utmContent && utmContent) {
-        const fieldId = parseInt(fields.utmContent, 10);
-        if (!isNaN(fieldId)) {
-          customFields.push({
-            field_id: fieldId,
-            values: [{ value: utmContent }],
-          });
-        }
-      }
-
-      if (fields.utmTerm && utmTerm) {
-        const fieldId = parseInt(fields.utmTerm, 10);
-        if (!isNaN(fieldId)) {
-          customFields.push({
-            field_id: fieldId,
-            values: [{ value: utmTerm }],
-          });
-        }
-      }
-
-      logger.info("Custom fields to send:", customFields);
-
-      // Preparar el payload del lead
-      const payload = [
+      // PASO 1: Crear el lead sin custom fields
+      const createPayload = [
         {
-          name: [`Lead de ${utmCampaign || "WhatsApp"}`], // ← Array en lugar de string
-          custom_fields_values: customFields,
+          name: [`Lead de ${utmCampaign || "WhatsApp"}`],
           _embedded: {
             contacts: [
               {
                 custom_fields_values: [
                   {
                     field_code: "PHONE",
-                    values: [{ value: phoneNumber, enum_code: "WORK" }],
+                    values: [
+                      {
+                        value: phoneNumber,
+                        enum_code: "WORK",
+                      },
+                    ],
                   },
                 ],
               },
             ],
-            tags: utmCampaign
-              ? [
-                  {
-                    name: utmCampaign,
-                  },
-                ]
-              : [],
+            tags: utmCampaign ? [{ name: utmCampaign }] : [],
           },
         },
       ];
 
-      logger.info("Creating lead in Kommo:", { phoneNumber, utmCampaign });
-      logger.debug("Full payload:", JSON.stringify(payload, null, 2));
-
-      const response = await this._makeRequestWithRetry(() =>
-        client.post("/leads", payload)
+      const createResponse = await this._makeRequestWithRetry(() =>
+        client.post("/leads", createPayload)
       );
 
-      const leadId = response.data._embedded?.leads?.[0]?.id;
+      const leadId = createResponse.data._embedded?.leads?.[0]?.id;
 
-      logger.info("Lead created successfully in Kommo:", { leadId });
+      if (!leadId) {
+        throw new Error("No lead ID returned from Kommo");
+      }
+
+      logger.info("Lead created, ID:", leadId);
+
+      // PASO 2: Preparar custom fields para PATCH
+      const customFields = [];
+
+      if (fields.utmSource && utmSource) {
+        customFields.push({
+          field_id: parseInt(fields.utmSource, 10),
+          values: [{ value: utmSource }],
+        });
+      }
+
+      if (fields.utmMedium && utmMedium) {
+        customFields.push({
+          field_id: parseInt(fields.utmMedium, 10),
+          values: [{ value: utmMedium }],
+        });
+      }
+
+      if (fields.utmCampaign && utmCampaign) {
+        customFields.push({
+          field_id: parseInt(fields.utmCampaign, 10),
+          values: [{ value: utmCampaign }],
+        });
+      }
+
+      if (fields.utmContent && utmContent) {
+        customFields.push({
+          field_id: parseInt(fields.utmContent, 10),
+          values: [{ value: utmContent }],
+        });
+      }
+
+      if (fields.utmTerm && utmTerm) {
+        customFields.push({
+          field_id: parseInt(fields.utmTerm, 10),
+          values: [{ value: utmTerm }],
+        });
+      }
+
+      // PASO 3: Actualizar con PATCH si hay custom fields
+      if (customFields.length > 0) {
+        logger.info("Updating lead with UTM fields:", {
+          leadId,
+          fieldsCount: customFields.length,
+        });
+
+        const updatePayload = {
+          custom_fields_values: customFields,
+        };
+
+        await this._makeRequestWithRetry(() =>
+          client.patch(`/leads/${leadId}`, updatePayload)
+        );
+
+        logger.info("Lead updated with UTM data successfully");
+      }
 
       return {
         success: true,
-        leadId: leadId?.toString(),
-        data: response.data,
+        leadId: leadId.toString(),
+        data: createResponse.data,
       };
     } catch (error) {
-      logger.error("Error creating lead in Kommo:", error.message);
+      logger.error("Error creating/updating lead in Kommo:", error.message);
       if (error.response) {
         logger.error(
-          "Kommo error response:",
+          "Kommo error:",
           JSON.stringify(error.response.data, null, 2)
         );
       }
