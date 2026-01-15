@@ -32,38 +32,15 @@ class KommoService {
       const client = kommoConfig.getClient();
       const fields = kommoConfig.getFields();
 
-      // Log con strings simples
       console.log("=== KOMMO CREATE LEAD START ===");
       console.log("Phone:", phoneNumber);
-      console.log("UTM Source:", utmSource);
-      console.log("UTM Medium:", utmMedium);
-      console.log("UTM Campaign:", utmCampaign);
-      console.log("UTM Content:", utmContent);
-      console.log("UTM Term:", utmTerm);
-      console.log("Field IDs:", JSON.stringify(fields));
+      console.log("Campaign:", utmCampaign);
 
-      // PASO 1: Crear el lead sin custom fields
+      // PASO 1: Crear el lead SIMPLE (sin contacto embedded)
       const createPayload = [
         {
-          name: [`Lead de ${utmCampaign || "WhatsApp"}`],
-          _embedded: {
-            contacts: [
-              {
-                custom_fields_values: [
-                  {
-                    field_code: "PHONE",
-                    values: [
-                      {
-                        value: phoneNumber,
-                        enum_code: "WORK",
-                      },
-                    ],
-                  },
-                ],
-              },
-            ],
-            tags: utmCampaign ? [{ name: utmCampaign }] : [],
-          },
+          name: `Lead de ${utmCampaign || "WhatsApp"}`, // ← String simple, NO array
+          // NO incluir contacto aquí, lo agregaremos después
         },
       ];
 
@@ -81,86 +58,158 @@ class KommoService {
 
       console.log("✅ Lead created, ID:", leadId);
 
-      // PASO 2: Preparar custom fields para PATCH
+      // PASO 2: Crear o buscar el contacto
+      console.log("Creating/finding contact with phone:", phoneNumber);
+
+      // Buscar si el contacto ya existe
+      let contactId;
+      try {
+        const searchResponse = await client.get("/contacts", {
+          params: {
+            query: phoneNumber,
+            limit: 1,
+          },
+        });
+
+        const existingContact = searchResponse.data._embedded?.contacts?.[0];
+
+        if (existingContact) {
+          contactId = existingContact.id;
+          console.log("✅ Contact found, ID:", contactId);
+        }
+      } catch (searchError) {
+        console.log("Contact search failed or not found");
+      }
+
+      // Si no existe, crear el contacto
+      if (!contactId) {
+        console.log("Creating new contact...");
+        const contactPayload = [
+          {
+            name: `Contact ${phoneNumber}`,
+            custom_fields_values: [
+              {
+                field_code: "PHONE",
+                values: [
+                  {
+                    value: phoneNumber,
+                    enum_code: "WORK",
+                  },
+                ],
+              },
+            ],
+          },
+        ];
+
+        const contactResponse = await this._makeRequestWithRetry(() =>
+          client.post("/contacts", contactPayload)
+        );
+
+        contactId = contactResponse.data._embedded?.contacts?.[0]?.id;
+        console.log("✅ Contact created, ID:", contactId);
+      }
+
+      // PASO 3: Vincular contacto al lead
+      if (contactId) {
+        console.log("Linking contact to lead...");
+        const linkPayload = [
+          {
+            id: leadId,
+            _embedded: {
+              contacts: [
+                {
+                  id: contactId,
+                },
+              ],
+            },
+          },
+        ];
+
+        await this._makeRequestWithRetry(() =>
+          client.patch("/leads", linkPayload)
+        );
+
+        console.log("✅ Contact linked to lead");
+      }
+
+      // PASO 4: Agregar tags si hay campaña
+      if (utmCampaign) {
+        console.log("Adding tags...");
+        const tagPayload = [
+          {
+            id: leadId,
+            _embedded: {
+              tags: [
+                {
+                  name: utmCampaign,
+                },
+              ],
+            },
+          },
+        ];
+
+        await this._makeRequestWithRetry(() =>
+          client.patch("/leads", tagPayload)
+        );
+
+        console.log("✅ Tags added");
+      }
+
+      // PASO 5: Preparar y agregar custom fields UTM
       const customFields = [];
 
       if (fields.utmSource && utmSource) {
-        const fieldId = parseInt(fields.utmSource, 10);
-        console.log("Adding field:", fieldId, "=", utmSource);
         customFields.push({
-          field_id: fieldId,
+          field_id: parseInt(fields.utmSource, 10),
           values: [{ value: utmSource }],
         });
       }
 
       if (fields.utmMedium && utmMedium) {
-        const fieldId = parseInt(fields.utmMedium, 10);
-        console.log("Adding field:", fieldId, "=", utmMedium);
         customFields.push({
-          field_id: fieldId,
+          field_id: parseInt(fields.utmMedium, 10),
           values: [{ value: utmMedium }],
         });
       }
 
       if (fields.utmCampaign && utmCampaign) {
-        const fieldId = parseInt(fields.utmCampaign, 10);
-        console.log("Adding field:", fieldId, "=", utmCampaign);
         customFields.push({
-          field_id: fieldId,
+          field_id: parseInt(fields.utmCampaign, 10),
           values: [{ value: utmCampaign }],
         });
       }
 
       if (fields.utmContent && utmContent) {
-        const fieldId = parseInt(fields.utmContent, 10);
-        console.log("Adding field:", fieldId, "=", utmContent);
         customFields.push({
-          field_id: fieldId,
+          field_id: parseInt(fields.utmContent, 10),
           values: [{ value: utmContent }],
         });
       }
 
       if (fields.utmTerm && utmTerm) {
-        const fieldId = parseInt(fields.utmTerm, 10);
-        console.log("Adding field:", fieldId, "=", utmTerm);
         customFields.push({
-          field_id: fieldId,
+          field_id: parseInt(fields.utmTerm, 10),
           values: [{ value: utmTerm }],
         });
       }
 
-      console.log("Total fields to update:", customFields.length);
+      console.log("Total custom fields:", customFields.length);
 
-      // PASO 3: Actualizar con PATCH si hay custom fields
       if (customFields.length > 0) {
         const updatePayload = {
           custom_fields_values: customFields,
         };
 
-        console.log("PATCH URL:", `/leads/${leadId}`);
-        console.log("PATCH payload:", JSON.stringify(updatePayload));
+        console.log("Updating lead with UTM fields...");
 
-        try {
-          await this._makeRequestWithRetry(() =>
-            client.patch(`/leads/${leadId}`, updatePayload)
-          );
+        await this._makeRequestWithRetry(() =>
+          client.patch(`/leads/${leadId}`, updatePayload)
+        );
 
-          console.log("✅ PATCH successful");
-        } catch (patchError) {
-          console.log("❌ PATCH FAILED");
-          console.log("Error message:", patchError.message);
-          if (patchError.response) {
-            console.log("Status:", patchError.response.status);
-            console.log(
-              "Error data:",
-              JSON.stringify(patchError.response.data)
-            );
-          }
-          throw patchError;
-        }
+        console.log("✅ UTM fields updated");
       }
 
-      logger.info("Lead created and updated successfully:", leadId);
+      console.log("=== KOMMO CREATE LEAD SUCCESS ===");
 
       return {
         success: true,
@@ -169,10 +218,10 @@ class KommoService {
       };
     } catch (error) {
       console.log("=== ERROR CATCH BLOCK ===");
-      console.log("Error message:", error.message);
+      console.log("Error:", error.message);
       if (error.response) {
-        console.log("Status code:", error.response.status);
-        console.log("Error details:", JSON.stringify(error.response.data));
+        console.log("Status:", error.response.status);
+        console.log("Details:", JSON.stringify(error.response.data));
       }
       console.log("=== END ERROR ===");
 
