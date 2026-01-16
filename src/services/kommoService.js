@@ -193,6 +193,15 @@ class KommoService {
         });
       }
 
+      if (fields.fbclid && leadData.fbclid) {
+        const fieldId = parseInt(fields.fbclid, 10);
+        console.log("Adding FBCLID:", fieldId, "=", leadData.fbclid);
+        customFields.push({
+          field_id: fieldId,
+          values: [{ value: leadData.fbclid }],
+        });
+      }
+
       console.log("Total custom fields:", customFields.length);
 
       if (customFields.length > 0) {

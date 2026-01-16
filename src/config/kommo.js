@@ -13,7 +13,8 @@ class KommoConfig {
       utmMedium: process.env.KOMMO_FIELD_UTM_MEDIUM,
       utmCampaign: process.env.KOMMO_FIELD_UTM_CAMPAIGN,
       utmContent: process.env.KOMMO_FIELD_UTM_CONTENT,
-      utmTerm: process.env.KOMMO_FIELD_UTM_TERM
+      utmTerm: process.env.KOMMO_FIELD_UTM_TERM,
+      fbclid: process.env.KOMMO_FIELD_FBCLID
     };
 
     // Solo crear el cliente si está configurado

@@ -15,6 +15,10 @@ model Click {
   utmCampaign   String?  @db.VarChar(100)
   utmContent    String?  @db.VarChar(200)
   utmTerm       String?  @db.VarChar(200)
+
+    // Facebook/Google Click IDs
+  fbclid        String?  @db.VarChar(200)
+  gclid         String?  @db.VarChar(200)
   
   // Metadata
   ipAddress     String?  @db.VarChar(45)
