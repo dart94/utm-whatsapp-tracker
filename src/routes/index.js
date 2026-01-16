@@ -18,6 +18,7 @@ router.get('/health', (req, res) => {
 });
 
 // Montar rutas
+router.use('/redirect', redirectRoutes);
 router.use('/wa', redirectRoutes);
 router.use('/api/clicks', clickRoutes);
 router.use('/api/campaigns', campaignRoutes);
