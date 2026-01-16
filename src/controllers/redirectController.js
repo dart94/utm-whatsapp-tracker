@@ -1,8 +1,8 @@
 const { prisma } = require("../config/database");
 const kommoService = require("../services/kommoService");
 const logger = require("../utils/logger");
-const fs = require('fs').promises;
-const path = require('path');
+const fs = require("fs").promises;
+const path = require("path");
 const {
   sanitizePhone,
   sanitizeUtm,
@@ -10,116 +10,252 @@ const {
   createResponse,
 } = require("../utils/helpers");
 
+// Rangos de IPs de Meta/Facebook
+const META_IP_RANGES = [
+  "173.252.",
+  "69.171.",
+  "31.13.",
+  "66.220.",
+  "157.240.",
+  "204.15.",
+  "69.63.",
+  "66.220.",
+  "173.252.",
+];
+
+// Función para detectar si es IP de Meta
+const isMetaIP = (ip) => {
+  if (!ip) return false;
+  return META_IP_RANGES.some((range) => ip.startsWith(range));
+};
+
 class RedirectController {
+  async handleRedirect(req, res) {
+    const { phone } = req.params;
+    const {
+      utm_source,
+      utm_medium,
+      utm_campaign,
+      utm_content,
+      utm_term,
+      fbclid,
+      gclid,
+    } = req.query;
+
+    try {
+      // Sanitizar datos
+      const phoneNumber = sanitizePhone(phone);
+
+      const cleanUtmParam = (value) => {
+        if (!value) return null;
+        if (value.includes("{{") || value.includes("}}")) {
+          return null;
+        }
+        return sanitizeUtm(value);
+      };
+
+      const utmData = {
+        utmSource: cleanUtmParam(utm_source),
+        utmMedium: cleanUtmParam(utm_medium),
+        utmCampaign: cleanUtmParam(utm_campaign),
+        utmContent: cleanUtmParam(utm_content),
+        utmTerm: cleanUtmParam(utm_term),
+        fbclid: sanitizeUtm(fbclid),
+        gclid: sanitizeUtm(gclid),
+      };
+
+      // Obtener metadata del request
+      const ipAddress = getClientIp(req);
+      const userAgent = req.headers["user-agent"];
+      const referer = req.headers["referer"] || req.headers["referrer"];
+
+      // Detectar si es IP de Meta (verificación automática)
+      const isMetaVerification = isMetaIP(ipAddress);
+
+      // Verificar duplicados (últimos 30 segundos)
+      const thirtySecondsAgo = new Date(Date.now() - 30000);
+      const recentClick = await prisma.click.findFirst({
+        where: {
+          phoneNumber,
+          ipAddress,
+          createdAt: {
+            gte: thirtySecondsAgo,
+          },
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
+      });
+
+      if (recentClick) {
+        logger.info(
+          "Duplicate click detected, redirecting without creating new record"
+        );
+        const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
+        return res.redirect(301, whatsappUrl);
+      }
+
+      logger.info("Processing redirect:", {
+        phoneNumber,
+        campaign: utmData.utmCampaign,
+        source: utmData.utmSource,
+        ip: ipAddress,
+        isMetaVerification, // ← Log si es verificación
+      });
+
+      // Crear registro en base de datos
+      const clickRecord = await prisma.click.create({
+        data: {
+          phoneNumber,
+          ...utmData,
+          ipAddress,
+          userAgent,
+          referer,
+          kommoStatus: isMetaVerification ? "skipped" : "pending", // ← Marcar como "skipped"
+        },
+      });
+
+      // SOLO crear lead en Kommo si NO es IP de Meta
+      if (!isMetaVerification) {
+        logger.info("Real user click - creating Kommo lead");
+        this._createKommoLeadAsync(clickRecord.id, phoneNumber, utmData).catch(
+          (error) => {
+            logger.error("Background Kommo lead creation failed:", error);
+          }
+        );
+      } else {
+        logger.info("Meta verification click - skipping Kommo lead creation");
+      }
+
+      // Redirigir a WhatsApp
+      const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
+      logger.info("Redirecting to WhatsApp:", { clickId: clickRecord.id });
+
+      return res.redirect(301, whatsappUrl);
+    } catch (error) {
+      logger.error("Error in redirect handler:", error);
+      const fallbackUrl = `${process.env.WHATSAPP_BASE_URL}/${sanitizePhone(
+        phone
+      )}`;
+      return res.redirect(301, fallbackUrl);
+    }
+  }
   /**
    * Manejar redirección a WhatsApp con tracking UTM
    */
-async handleRedirect(req, res) {
-  const { phone } = req.params;
-  const { 
-    utm_source, 
-    utm_medium, 
-    utm_campaign, 
-    utm_content, 
-    utm_term,
-    fbclid,
-    gclid
-  } = req.query;
+  async handleRedirect(req, res) {
+    const { phone } = req.params;
+    const {
+      utm_source,
+      utm_medium,
+      utm_campaign,
+      utm_content,
+      utm_term,
+      fbclid,
+      gclid,
+    } = req.query;
 
-  try {
-    // Sanitizar datos
-    const phoneNumber = sanitizePhone(phone);
-    
-    // Función helper para detectar parámetros no reemplazados
-    const cleanUtmParam = (value) => {
-      if (!value) return null;
-      if (value.includes('{{') || value.includes('}}')) {
-        return null;
-      }
-      return sanitizeUtm(value);
-    };
-    
-    const utmData = {
-      utmSource: cleanUtmParam(utm_source),
-      utmMedium: cleanUtmParam(utm_medium),
-      utmCampaign: cleanUtmParam(utm_campaign),
-      utmContent: cleanUtmParam(utm_content),
-      utmTerm: cleanUtmParam(utm_term),
-      fbclid: sanitizeUtm(fbclid),
-      gclid: sanitizeUtm(gclid)
-    };
+    try {
+      // Sanitizar datos
+      const phoneNumber = sanitizePhone(phone);
 
-    // Obtener metadata del request
-    const ipAddress = getClientIp(req);
-    const userAgent = req.headers['user-agent'];
-    const referer = req.headers['referer'] || req.headers['referrer'];
-
-    // Crear un identificador único para este click
-    const clickFingerprint = `${phoneNumber}-${ipAddress}-${userAgent}-${utmData.utmCampaign}`;
-    const clickHash = require('crypto').createHash('md5').update(clickFingerprint).digest('hex');
-
-    // Verificar si este click ya existe en los últimos 10 segundos
-    const tenSecondsAgo = new Date(Date.now() - 10000);
-    const recentClick = await prisma.click.findFirst({
-      where: {
-        phoneNumber,
-        ipAddress,
-        createdAt: {
-          gte: tenSecondsAgo
+      // Función helper para detectar parámetros no reemplazados
+      const cleanUtmParam = (value) => {
+        if (!value) return null;
+        if (value.includes("{{") || value.includes("}}")) {
+          return null;
         }
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    });
+        return sanitizeUtm(value);
+      };
 
-    // Si ya existe un click muy reciente, solo redirigir sin crear nuevo
-    if (recentClick) {
-      logger.info('Duplicate click detected, redirecting without creating new record');
-      const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
-      return res.redirect(301, whatsappUrl);
-    }
+      const utmData = {
+        utmSource: cleanUtmParam(utm_source),
+        utmMedium: cleanUtmParam(utm_medium),
+        utmCampaign: cleanUtmParam(utm_campaign),
+        utmContent: cleanUtmParam(utm_content),
+        utmTerm: cleanUtmParam(utm_term),
+        fbclid: sanitizeUtm(fbclid),
+        gclid: sanitizeUtm(gclid),
+      };
 
-    logger.info('Processing new redirect:', {
-      phoneNumber,
-      campaign: utmData.utmCampaign,
-      source: utmData.utmSource,
-      fbclid: utmData.fbclid,
-      ip: ipAddress
-    });
+      // Obtener metadata del request
+      const ipAddress = getClientIp(req);
+      const userAgent = req.headers["user-agent"];
+      const referer = req.headers["referer"] || req.headers["referrer"];
 
-    // Crear registro en base de datos
-    const clickRecord = await prisma.click.create({
-      data: {
-        phoneNumber,
-        ...utmData,
-        ipAddress,
-        userAgent,
-        referer,
-        kommoStatus: 'pending'
-      }
-    });
+      // Crear un identificador único para este click
+      const clickFingerprint = `${phoneNumber}-${ipAddress}-${userAgent}-${utmData.utmCampaign}`;
+      const clickHash = require("crypto")
+        .createHash("md5")
+        .update(clickFingerprint)
+        .digest("hex");
 
-    // Intentar crear lead en Kommo (sin bloquear la redirección)
-    this._createKommoLeadAsync(clickRecord.id, phoneNumber, utmData)
-      .catch(error => {
-        logger.error('Background Kommo lead creation failed:', error);
+      // Verificar si este click ya existe en los últimos 10 segundos
+      const tenSecondsAgo = new Date(Date.now() - 10000);
+      const recentClick = await prisma.click.findFirst({
+        where: {
+          phoneNumber,
+          ipAddress,
+          createdAt: {
+            gte: tenSecondsAgo,
+          },
+        },
+        orderBy: {
+          createdAt: "desc",
+        },
       });
 
-    // Redirigir INMEDIATAMENTE a WhatsApp (301)
-    const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
-    
-    logger.info('Redirecting to WhatsApp:', { clickId: clickRecord.id });
-    
-    return res.redirect(301, whatsappUrl);
+      // Si ya existe un click muy reciente, solo redirigir sin crear nuevo
+      if (recentClick) {
+        logger.info(
+          "Duplicate click detected, redirecting without creating new record"
+        );
+        const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
+        return res.redirect(301, whatsappUrl);
+      }
 
-  } catch (error) {
-    logger.error('Error in redirect handler:', error);
+      logger.info("Processing new redirect:", {
+        phoneNumber,
+        campaign: utmData.utmCampaign,
+        source: utmData.utmSource,
+        fbclid: utmData.fbclid,
+        ip: ipAddress,
+      });
 
-    const fallbackUrl = `${process.env.WHATSAPP_BASE_URL}/${sanitizePhone(phone)}`;
-    return res.redirect(301, fallbackUrl);
+      // Crear registro en base de datos
+      const clickRecord = await prisma.click.create({
+        data: {
+          phoneNumber,
+          ...utmData,
+          ipAddress,
+          userAgent,
+          referer,
+          kommoStatus: "pending",
+        },
+      });
+
+      // Intentar crear lead en Kommo (sin bloquear la redirección)
+      this._createKommoLeadAsync(clickRecord.id, phoneNumber, utmData).catch(
+        (error) => {
+          logger.error("Background Kommo lead creation failed:", error);
+        }
+      );
+
+      // Redirigir INMEDIATAMENTE a WhatsApp (301)
+      const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
+
+      logger.info("Redirecting to WhatsApp:", { clickId: clickRecord.id });
+
+      return res.redirect(301, whatsappUrl);
+    } catch (error) {
+      logger.error("Error in redirect handler:", error);
+
+      const fallbackUrl = `${process.env.WHATSAPP_BASE_URL}/${sanitizePhone(
+        phone
+      )}`;
+      return res.redirect(301, fallbackUrl);
+    }
   }
-}
   /**
    * Crear lead en Kommo de forma asíncrona
    * @private
@@ -254,7 +390,7 @@ async handleRedirect(req, res) {
         utmContent: click.utmContent,
         utmTerm: click.utmTerm,
         fbclid: click.fbclid,
-        gclid: click.gclid
+        gclid: click.gclid,
       });
 
       return res.json(
