@@ -1,6 +1,8 @@
 const { prisma } = require("../config/database");
 const kommoService = require("../services/kommoService");
 const logger = require("../utils/logger");
+const fs = require('fs').promises;
+const path = require('path');
 const {
   sanitizePhone,
   sanitizeUtm,
@@ -13,76 +15,84 @@ class RedirectController {
    * Manejar redirección a WhatsApp con tracking UTM
    */
   async handleRedirect(req, res) {
-  const { phone } = req.params;
-  const { 
-    utm_source, 
-    utm_medium, 
-    utm_campaign, 
-    utm_content, 
-    utm_term,
-    fbclid,  // ← Nuevo
-    gclid    // ← Nuevo (por si usas Google Ads también)
-  } = req.query;
+    const { phone } = req.params;
+    const { 
+      utm_source, 
+      utm_medium, 
+      utm_campaign, 
+      utm_content, 
+      utm_term,
+      fbclid,
+      gclid
+    } = req.query;
 
-  try {
-    // Sanitizar datos
-    const phoneNumber = sanitizePhone(phone);
-    const utmData = {
-      utmSource: sanitizeUtm(utm_source),
-      utmMedium: sanitizeUtm(utm_medium),
-      utmCampaign: sanitizeUtm(utm_campaign),
-      utmContent: sanitizeUtm(utm_content),
-      utmTerm: sanitizeUtm(utm_term),
-      fbclid: sanitizeUtm(fbclid),    // ← Nuevo
-      gclid: sanitizeUtm(gclid)        // ← Nuevo
-    };
+    try {
+      // Sanitizar datos
+      const phoneNumber = sanitizePhone(phone);
+      const utmData = {
+        utmSource: sanitizeUtm(utm_source),
+        utmMedium: sanitizeUtm(utm_medium),
+        utmCampaign: sanitizeUtm(utm_campaign),
+        utmContent: sanitizeUtm(utm_content),
+        utmTerm: sanitizeUtm(utm_term),
+        fbclid: sanitizeUtm(fbclid),
+        gclid: sanitizeUtm(gclid)
+      };
 
-    // Obtener metadata del request
-    const ipAddress = getClientIp(req);
-    const userAgent = req.headers['user-agent'];
-    const referer = req.headers['referer'] || req.headers['referrer'];
+      // Obtener metadata del request
+      const ipAddress = getClientIp(req);
+      const userAgent = req.headers['user-agent'];
+      const referer = req.headers['referer'] || req.headers['referrer'];
 
-    logger.info('Processing redirect:', {
-      phoneNumber,
-      campaign: utmData.utmCampaign,
-      source: utmData.utmSource,
-      fbclid: utmData.fbclid,  // ← Nuevo log
-      ip: ipAddress
-    });
-
-    // Crear registro en base de datos
-    const clickRecord = await prisma.click.create({
-      data: {
+      logger.info('Processing redirect:', {
         phoneNumber,
-        ...utmData,
-        ipAddress,
-        userAgent,
-        referer,
-        kommoStatus: 'pending'
-      }
-    });
-
-    // Intentar crear lead en Kommo (sin bloquear la redirección)
-    this._createKommoLeadAsync(clickRecord.id, phoneNumber, utmData)
-      .catch(error => {
-        logger.error('Background Kommo lead creation failed:', error);
+        campaign: utmData.utmCampaign,
+        source: utmData.utmSource,
+        fbclid: utmData.fbclid,
+        ip: ipAddress
       });
 
-    // Redirigir inmediatamente a WhatsApp
-    const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
-    
-    logger.info('Redirecting to WhatsApp:', { clickId: clickRecord.id, url: whatsappUrl });
-    
-    return res.redirect(301, whatsappUrl);
+      // Crear registro en base de datos
+      const clickRecord = await prisma.click.create({
+        data: {
+          phoneNumber,
+          ...utmData,
+          ipAddress,
+          userAgent,
+          referer,
+          kommoStatus: 'pending'
+        }
+      });
 
-  } catch (error) {
-    logger.error('Error in redirect handler:', error);
+      // Intentar crear lead en Kommo (sin bloquear la redirección)
+      this._createKommoLeadAsync(clickRecord.id, phoneNumber, utmData)
+        .catch(error => {
+          logger.error('Background Kommo lead creation failed:', error);
+        });
 
-    // Incluso si hay error, redirigir al usuario
-    const fallbackUrl = `${process.env.WHATSAPP_BASE_URL}/${sanitizePhone(phone)}`;
-    return res.redirect(301, fallbackUrl);
+      // Construir URL de WhatsApp
+      const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
+      
+      logger.info('Showing redirect page to WhatsApp:', { clickId: clickRecord.id, url: whatsappUrl });
+      
+      // Leer la landing page
+      const htmlPath = path.join(__dirname, '../views/redirect.html');
+      let html = await fs.readFile(htmlPath, 'utf-8');
+      
+      // Reemplazar la URL de WhatsApp
+      html = html.replace('{{WHATSAPP_URL}}', whatsappUrl);
+      
+      // Enviar la landing page
+      return res.send(html);
+
+    } catch (error) {
+      logger.error('Error in redirect handler:', error);
+
+      // Fallback: redirigir directamente si hay error
+      const fallbackUrl = `${process.env.WHATSAPP_BASE_URL}/${sanitizePhone(phone)}`;
+      return res.redirect(301, fallbackUrl);
+    }
   }
-}
 
   /**
    * Crear lead en Kommo de forma asíncrona
@@ -217,6 +227,8 @@ class RedirectController {
         utmCampaign: click.utmCampaign,
         utmContent: click.utmContent,
         utmTerm: click.utmTerm,
+        fbclid: click.fbclid,
+        gclid: click.gclid
       });
 
       return res.json(
