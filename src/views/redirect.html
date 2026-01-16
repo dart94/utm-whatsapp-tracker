@@ -72,10 +72,15 @@
     </div>
     
     <script>
-        // Redirigir automáticamente
-        setTimeout(() => {
-            window.location.href = "{{WHATSAPP_URL}}";
-        }, 1000); // 1 segundo
+        // Evitar múltiples redirecciones
+        if (!sessionStorage.getItem('redirected')) {
+            sessionStorage.setItem('redirected', 'true');
+            
+            // Redirigir automáticamente
+            setTimeout(function() {
+                window.location.replace("{{WHATSAPP_URL}}");
+            }, 1000);
+        }
     </script>
 </body>
 </html>
