@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>Redirigiendo a WhatsApp...</title>
     <style>
         * {
@@ -72,15 +75,38 @@
     </div>
     
     <script>
-        // Evitar múltiples redirecciones
-        if (!sessionStorage.getItem('redirected')) {
-            sessionStorage.setItem('redirected', 'true');
+        (function() {
+            // Función para obtener cookie
+            function getCookie(name) {
+                const value = "; " + document.cookie;
+                const parts = value.split("; " + name + "=");
+                if (parts.length === 2) return parts.pop().split(";").shift();
+                return null;
+            }
             
-            // Redirigir automáticamente
-            setTimeout(function() {
+            // Función para crear cookie
+            function setCookie(name, value, seconds) {
+                const date = new Date();
+                date.setTime(date.getTime() + (seconds * 1000));
+                document.cookie = name + "=" + value + ";expires=" + date.toUTCString() + ";path=/";
+            }
+            
+            // Verificar si ya se redirigió recientemente (últimos 10 segundos)
+            const alreadyRedirected = getCookie('wa_redirected');
+            
+            if (!alreadyRedirected) {
+                // Marcar como redirigido por 10 segundos
+                setCookie('wa_redirected', '1', 10);
+                
+                // Redirigir después de 800ms
+                setTimeout(function() {
+                    window.location.replace("{{WHATSAPP_URL}}");
+                }, 800);
+            } else {
+                // Si ya redirigió, solo cerrar o ir a WhatsApp sin esperar
                 window.location.replace("{{WHATSAPP_URL}}");
-            }, 1000);
-        }
+            }
+        })();
     </script>
 </body>
 </html>

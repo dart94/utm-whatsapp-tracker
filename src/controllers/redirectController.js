@@ -14,7 +14,7 @@ class RedirectController {
   /**
    * Manejar redirección a WhatsApp con tracking UTM
    */
-  async handleRedirect(req, res) {
+async handleRedirect(req, res) {
   const { phone } = req.params;
   const { 
     utm_source, 
@@ -33,7 +33,6 @@ class RedirectController {
     // Función helper para detectar parámetros no reemplazados
     const cleanUtmParam = (value) => {
       if (!value) return null;
-      // Si contiene {{ }}, significa que Meta no lo reemplazó (preview/test)
       if (value.includes('{{') || value.includes('}}')) {
         return null;
       }
@@ -55,7 +54,33 @@ class RedirectController {
     const userAgent = req.headers['user-agent'];
     const referer = req.headers['referer'] || req.headers['referrer'];
 
-    logger.info('Processing redirect:', {
+    // Crear un identificador único para este click
+    const clickFingerprint = `${phoneNumber}-${ipAddress}-${userAgent}-${utmData.utmCampaign}`;
+    const clickHash = require('crypto').createHash('md5').update(clickFingerprint).digest('hex');
+
+    // Verificar si este click ya existe en los últimos 10 segundos
+    const tenSecondsAgo = new Date(Date.now() - 10000);
+    const recentClick = await prisma.click.findFirst({
+      where: {
+        phoneNumber,
+        ipAddress,
+        createdAt: {
+          gte: tenSecondsAgo
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+
+    // Si ya existe un click muy reciente, solo redirigir sin crear nuevo
+    if (recentClick) {
+      logger.info('Duplicate click detected, redirecting without creating new record');
+      const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
+      return res.redirect(301, whatsappUrl);
+    }
+
+    logger.info('Processing new redirect:', {
       phoneNumber,
       campaign: utmData.utmCampaign,
       source: utmData.utmSource,
@@ -81,37 +106,20 @@ class RedirectController {
         logger.error('Background Kommo lead creation failed:', error);
       });
 
-    // Construir URL de WhatsApp
+    // Redirigir INMEDIATAMENTE a WhatsApp (301)
     const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
     
-    logger.info('Showing redirect page to WhatsApp:', { clickId: clickRecord.id, url: whatsappUrl });
+    logger.info('Redirecting to WhatsApp:', { clickId: clickRecord.id });
     
-    // Leer la landing page
-    const htmlPath = path.join(__dirname, '../views/redirect.html');
-    let html = await fs.readFile(htmlPath, 'utf-8');
-    
-    // Reemplazar la URL de WhatsApp
-    html = html.replace('{{WHATSAPP_URL}}', whatsappUrl);
-    
-    // Agregar header para evitar cache
-    res.set({
-      'Cache-Control': 'no-store, no-cache, must-revalidate, private',
-      'Expires': '0',
-      'Pragma': 'no-cache'
-    });
-    
-    // Enviar la landing page
-    return res.send(html);
+    return res.redirect(301, whatsappUrl);
 
   } catch (error) {
     logger.error('Error in redirect handler:', error);
 
-    // Fallback: redirigir directamente si hay error
     const fallbackUrl = `${process.env.WHATSAPP_BASE_URL}/${sanitizePhone(phone)}`;
     return res.redirect(301, fallbackUrl);
   }
 }
-
   /**
    * Crear lead en Kommo de forma asíncrona
    * @private
