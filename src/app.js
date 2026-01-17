@@ -4,6 +4,9 @@ const morgan = require('morgan');
 const logger = require('./utils/logger');
 const routes = require('./routes');
 const { notFoundHandler, errorHandler } = require('./middlewares/errorHandler');
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpec = require('./config/swagger');
+
 
 // Crear aplicación Express
 const app = express();
@@ -41,6 +44,18 @@ app.use((req, res, next) => {
 // Montar rutas principales
 app.use('/', routes);
 
+/**
+ * @openapi
+ * /:
+ *   get:
+ *     tags: [Health]
+ *     summary: Info básica de la API
+ *     responses:
+ *       200:
+ *         description: Estado y endpoints disponibles
+ */
+
+
 // Ruta raíz - información de la API
 app.get('/', (req, res) => {
   res.json({
@@ -58,6 +73,11 @@ app.get('/', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// Swagger Docs
+app.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+app.get('/docs.json', (req, res) => res.json(swaggerSpec));
+
 
 // Manejo de errores 404
 app.use(notFoundHandler);
