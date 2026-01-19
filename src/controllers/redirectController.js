@@ -32,117 +32,141 @@ class RedirectController {
   /**
    * Manejar redirección a WhatsApp con tracking UTM
    */
-  async handleRedirect(req, res) {
-    const { phone } = req.params;
-    const {
-      utm_source,
-      utm_medium,
-      utm_campaign,
-      utm_content,
-      utm_term,
-      fbclid,
-      gclid,
-    } = req.query;
+async handleRedirect(req, res) {
+  const { phone } = req.params;
+  const {
+    utm_source,
+    utm_medium,
+    utm_campaign,
+    utm_content,
+    utm_term,
+    fbclid,
+    gclid,
+  } = req.query;
 
-    try {
-      // Sanitizar datos
-      const phoneNumber = sanitizePhone(phone);
+  try {
+    // Sanitizar datos
+    const phoneNumber = sanitizePhone(phone);
 
-      // Función helper para detectar parámetros no reemplazados
-      const cleanUtmParam = (value) => {
-        if (!value) return null;
-        if (value.includes("{{") || value.includes("}}")) {
-          return null;
-        }
-        return sanitizeUtm(value);
-      };
-
-      const utmData = {
-        utmSource: cleanUtmParam(utm_source),
-        utmMedium: cleanUtmParam(utm_medium),
-        utmCampaign: cleanUtmParam(utm_campaign),
-        utmContent: cleanUtmParam(utm_content),
-        utmTerm: cleanUtmParam(utm_term),
-        fbclid: sanitizeUtm(fbclid),
-        gclid: sanitizeUtm(gclid),
-      };
-
-      // Obtener metadata del request
-      const ipAddress = getClientIp(req);
-      const userAgent = req.headers["user-agent"];
-      const referer = req.headers["referer"] || req.headers["referrer"];
-
-      // Detectar si es IP de Meta (verificación automática)
-      const isMetaVerification = isMetaIP(ipAddress);
-
-      // Verificar duplicados (últimos 30 segundos)
-      const thirtySecondsAgo = new Date(Date.now() - 30000);
-      const recentClick = await prisma.click.findFirst({
-        where: {
-          phoneNumber,
-          ipAddress,
-          createdAt: {
-            gte: thirtySecondsAgo,
-          },
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-      });
-
-      if (recentClick) {
-        logger.info(
-          "Duplicate click detected, redirecting without creating new record"
-        );
-        const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
-        return res.redirect(301, whatsappUrl);
+    // Función helper para detectar parámetros no reemplazados
+    const cleanUtmParam = (value) => {
+      if (!value) return null;
+      if (value.includes("{{") || value.includes("}}")) {
+        return null;
       }
+      return sanitizeUtm(value);
+    };
 
-      logger.info("Processing redirect:", {
+    const utmData = {
+      utmSource: cleanUtmParam(utm_source),
+      utmMedium: cleanUtmParam(utm_medium),
+      utmCampaign: cleanUtmParam(utm_campaign),
+      utmContent: cleanUtmParam(utm_content),
+      utmTerm: cleanUtmParam(utm_term),
+      fbclid: sanitizeUtm(fbclid),
+      gclid: sanitizeUtm(gclid),
+    };
+
+    // Obtener metadata del request
+    const ipAddress = getClientIp(req);
+    const userAgent = req.headers["user-agent"];
+    const referer = req.headers["referer"] || req.headers["referrer"];
+
+    // Detectar si es IP de Meta (verificación automática)
+    const isMetaVerification = isMetaIP(ipAddress);
+
+    // Verificar duplicados (últimos 30 segundos)
+    const thirtySecondsAgo = new Date(Date.now() - 30000);
+    const recentClick = await prisma.click.findFirst({
+      where: {
         phoneNumber,
-        campaign: utmData.utmCampaign,
-        source: utmData.utmSource,
-        ip: ipAddress,
-        isMetaVerification,
-      });
-
-      // Crear registro en base de datos
-      const clickRecord = await prisma.click.create({
-        data: {
-          phoneNumber,
-          ...utmData,
-          ipAddress,
-          userAgent,
-          referer,
-          kommoStatus: isMetaVerification ? "skipped" : "pending",
+        ipAddress,
+        createdAt: {
+          gte: thirtySecondsAgo,
         },
-      });
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
 
-      // SOLO crear lead en Kommo si NO es IP de Meta
-      if (!isMetaVerification) {
-        logger.info("Real user click - creating Kommo lead");
-        this._createKommoLeadAsync(clickRecord.id, phoneNumber, utmData).catch(
-          (error) => {
-            logger.error("Background Kommo lead creation failed:", error);
-          }
-        );
-      } else {
-        logger.info("Meta verification click - skipping Kommo lead creation");
-      }
-
-      // Redirigir a WhatsApp
+    if (recentClick) {
+      logger.info(
+        "Duplicate click detected, redirecting without creating new record"
+      );
       const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
-      logger.info("Redirecting to WhatsApp:", { clickId: clickRecord.id });
+      
+      // Usar landing page también para duplicados
+      const htmlPath = path.join(__dirname, "../views/redirect.html");
+      let html = await fs.readFile(htmlPath, "utf-8");
+      html = html.replace("{{WHATSAPP_URL}}", whatsappUrl);
+      
+      return res.send(html);
+    }
 
-      return res.redirect(301, whatsappUrl);
-    } catch (error) {
-      logger.error("Error in redirect handler:", error);
-      const fallbackUrl = `${process.env.WHATSAPP_BASE_URL}/${sanitizePhone(
-        phone
-      )}`;
+    logger.info("Processing redirect:", {
+      phoneNumber,
+      campaign: utmData.utmCampaign,
+      source: utmData.utmSource,
+      ip: ipAddress,
+      isMetaVerification,
+    });
+
+    // Crear registro en base de datos
+    const clickRecord = await prisma.click.create({
+      data: {
+        phoneNumber,
+        ...utmData,
+        ipAddress,
+        userAgent,
+        referer,
+        kommoStatus: isMetaVerification ? "skipped" : "pending",
+      },
+    });
+
+    // SOLO crear lead en Kommo si NO es IP de Meta
+    if (!isMetaVerification) {
+      logger.info("Real user click - creating Kommo lead");
+      this._createKommoLeadAsync(clickRecord.id, phoneNumber, utmData).catch(
+        (error) => {
+          logger.error("Background Kommo lead creation failed:", error);
+        }
+      );
+    } else {
+      logger.info("Meta verification click - skipping Kommo lead creation");
+    }
+
+    // Construir URL de WhatsApp
+    const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}`;
+    logger.info("Showing redirect page to WhatsApp:", {
+      clickId: clickRecord.id,
+    });
+
+    // Leer y enviar landing page
+    const htmlPath = path.join(__dirname, "../views/redirect.html");
+    let html = await fs.readFile(htmlPath, "utf-8");
+    html = html.replace("{{WHATSAPP_URL}}", whatsappUrl);
+
+    return res.send(html);
+  } catch (error) {
+    logger.error("Error in redirect handler:", error);
+
+    // Fallback con landing page también
+    const fallbackUrl = `${process.env.WHATSAPP_BASE_URL}/${sanitizePhone(
+      phone
+    )}`;
+    
+    try {
+      const htmlPath = path.join(__dirname, "../views/redirect.html");
+      let html = await fs.readFile(htmlPath, "utf-8");
+      html = html.replace("{{WHATSAPP_URL}}", fallbackUrl);
+      return res.send(html);
+    } catch (htmlError) {
+      // Si incluso el HTML falla, redirigir directamente
       return res.redirect(301, fallbackUrl);
     }
   }
+}
 
   /**
    * Crear lead en Kommo de forma asíncrona

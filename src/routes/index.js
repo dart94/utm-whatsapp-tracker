@@ -48,6 +48,7 @@ router.get('/health', (req, res) => {
 });
 
 // Montar rutas
+router.use('/c', redirectRoutes);
 router.use('/redirect', redirectRoutes);
 router.use('/wa', redirectRoutes);
 router.use('/api/clicks', clickRoutes);
