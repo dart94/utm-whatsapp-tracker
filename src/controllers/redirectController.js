@@ -31,190 +31,198 @@ class RedirectController {
   /**
    * Manejar redirección a WhatsApp con tracking UTM
    */
-  async handleRedirect(req, res) {
-    const { phone } = req.params;
-    const {
-      utm_source,
-      utm_medium,
-      utm_campaign,
-      utm_content,
-      utm_term,
-      fbclid,
-      gclid,
-    } = req.query;
+async handleRedirect(req, res) {
+  const { phone } = req.params;
+  const {
+    utm_source,
+    utm_medium,
+    utm_campaign,
+    utm_content,
+    utm_term,
+    fbclid,
+    gclid,
+  } = req.query;
 
-    try {
-      // Sanitizar datos
-      const phoneNumber = sanitizePhone(phone);
+  try {
+    // Sanitizar datos
+    const phoneNumber = sanitizePhone(phone);
 
-      // Función helper para detectar parámetros no reemplazados
-      const cleanUtmParam = (value) => {
-        if (!value) return null;
-        if (value.includes("{{") || value.includes("}}")) {
-          return null;
-        }
-        return sanitizeUtm(value);
-      };
+    const cleanUtmParam = (value) => {
+      if (!value) return null;
+      if (value.includes("{{") || value.includes("}}")) {
+        return null;
+      }
+      return sanitizeUtm(value);
+    };
 
-      const utmData = {
-        utmSource: cleanUtmParam(utm_source),
-        utmMedium: cleanUtmParam(utm_medium),
-        utmCampaign: cleanUtmParam(utm_campaign),
-        utmContent: cleanUtmParam(utm_content),
-        utmTerm: cleanUtmParam(utm_term),
-        fbclid: sanitizeUtm(fbclid),
-        gclid: sanitizeUtm(gclid),
-      };
+    const utmData = {
+      utmSource: cleanUtmParam(utm_source),
+      utmMedium: cleanUtmParam(utm_medium),
+      utmCampaign: cleanUtmParam(utm_campaign),
+      utmContent: cleanUtmParam(utm_content),
+      utmTerm: cleanUtmParam(utm_term),
+      fbclid: sanitizeUtm(fbclid),
+      gclid: sanitizeUtm(gclid),
+    };
 
-      // Obtener metadata del request
-      const ipAddress = getClientIp(req);
-      const userAgent = req.headers["user-agent"];
-      const referer = req.headers["referer"] || req.headers["referrer"];
+    // Obtener metadata del request
+    const ipAddress = getClientIp(req);
+    const userAgent = req.headers["user-agent"];
+    const referer = req.headers["referer"] || req.headers["referrer"];
 
-      // Detectar si es IP de Meta
-      const isMetaVerification = isMetaIP(ipAddress);
+    // Detectar si es IP de Meta
+    const isMetaVerification = isMetaIP(ipAddress);
 
-      // DEDUPLICACIÓN 1: Por IP (60 segundos)
-      const oneMinuteAgo = new Date(Date.now() - 60000);
-      const recentClickSameIP = await prisma.click.findFirst({
-        where: {
-          phoneNumber,
-          ipAddress,
-          createdAt: {
-            gte: oneMinuteAgo,
-          },
+    // DEDUPLICACIÓN 1: Por IP + User Agent (5 minutos)
+    // Esto previene loops y clicks accidentales
+    const fiveMinutesAgo = new Date(Date.now() - 300000);
+    const recentClickSameUser = await prisma.click.findFirst({
+      where: {
+        ipAddress,
+        userAgent,
+        createdAt: {
+          gte: fiveMinutesAgo,
         },
-        orderBy: {
-          createdAt: "desc",
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
+
+    if (recentClickSameUser) {
+      logger.info("Duplicate click from same user (within 5 min)", {
+        ip: ipAddress,
+        minutesAgo: Math.round((Date.now() - new Date(recentClickSameUser.createdAt).getTime()) / 60000)
+      });
+
+      // Mostrar página con botón (sin crear registro nuevo)
+      const whatsappMessage = encodeURIComponent(
+        `Hola! Vengo de la promoción ${utmData.utmCampaign || "en redes sociales"}`
+      );
+      const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}?text=${whatsappMessage}`;
+
+      const htmlPath = path.join(__dirname, "../views/redirect.html");
+      let html = await fs.readFile(htmlPath, "utf-8");
+
+      html = html.replace("{{WHATSAPP_URL}}", whatsappUrl);
+      html = html.replace("{{MESSAGE}}", "¡Hablemos!");
+      html = html.replace("{{DESCRIPTION}}", "Toca el botón para abrir WhatsApp");
+
+      return res.send(html);
+    }
+
+    // DEDUPLICACIÓN 2: Por FBCLID (si existe)
+    // Cada fbclid es único por click de Meta
+    if (fbclid) {
+      const existingFbclid = await prisma.click.findFirst({
+        where: {
+          fbclid,
         },
       });
 
-      if (recentClickSameIP) {
-        logger.info("Duplicate click from same IP (within 60s)");
-        
-        // Personalizar mensaje según campaña
+      if (existingFbclid) {
+        logger.info("Duplicate FBCLID detected", { fbclid });
+
         const whatsappMessage = encodeURIComponent(
           `Hola! Vengo de la promoción ${utmData.utmCampaign || "en redes sociales"}`
         );
         const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}?text=${whatsappMessage}`;
 
-        // Mostrar página con botón
         const htmlPath = path.join(__dirname, "../views/redirect.html");
         let html = await fs.readFile(htmlPath, "utf-8");
-        
+
         html = html.replace("{{WHATSAPP_URL}}", whatsappUrl);
         html = html.replace("{{MESSAGE}}", "¡Hablemos!");
         html = html.replace("{{DESCRIPTION}}", "Toca el botón para abrir WhatsApp");
 
         return res.send(html);
       }
+    }
 
-      // DEDUPLICACIÓN 2: Por teléfono (24 horas para Kommo)
-      const twentyFourHoursAgo = new Date(Date.now() - 86400000);
-      const recentClickSamePhone = await prisma.click.findFirst({
-        where: {
-          phoneNumber,
-          kommoStatus: "success",
-          createdAt: {
-            gte: twentyFourHoursAgo,
-          },
-        },
-        orderBy: {
-          createdAt: "desc",
-        },
-      });
+    logger.info("Processing new redirect:", {
+      phoneNumber,
+      campaign: utmData.utmCampaign,
+      source: utmData.utmSource,
+      ip: ipAddress,
+      isMetaVerification,
+    });
 
-      logger.info("Processing redirect:", {
+    // SIEMPRE crear lead en Kommo (excepto si es IP de Meta)
+    const shouldCreateKommoLead = !isMetaVerification;
+
+    // Crear registro en BD
+    const clickRecord = await prisma.click.create({
+      data: {
         phoneNumber,
-        campaign: utmData.utmCampaign,
-        source: utmData.utmSource,
-        ip: ipAddress,
-        isMetaVerification,
-        hasRecentLead: !!recentClickSamePhone,
-      });
+        ...utmData,
+        ipAddress,
+        userAgent,
+        referer,
+        kommoStatus: isMetaVerification ? "skipped" : "pending",
+      },
+    });
 
-      // Determinar si crear lead en Kommo
-      const shouldCreateKommoLead = !isMetaVerification && !recentClickSamePhone;
-
-      // Crear registro en BD
-      const clickRecord = await prisma.click.create({
-        data: {
-          phoneNumber,
-          ...utmData,
-          ipAddress,
-          userAgent,
-          referer,
-          kommoStatus: isMetaVerification
-            ? "skipped"
-            : recentClickSamePhone
-            ? "duplicate"
-            : "pending",
-        },
-      });
-
-      // Crear lead en Kommo si corresponde
-      if (shouldCreateKommoLead) {
-        logger.info("Real user click - creating Kommo lead");
-        this._createKommoLeadAsync(clickRecord.id, phoneNumber, utmData).catch(
-          (error) => {
-            logger.error("Background Kommo lead creation failed:", error);
-          }
-        );
-      } else if (recentClickSamePhone) {
-        logger.info("Phone has recent lead - skipping Kommo");
-      } else {
-        logger.info("Meta verification - skipping Kommo");
-      }
-
-      // Construir URL de WhatsApp con mensaje pre-llenado
-      const whatsappMessage = encodeURIComponent(
-        `Hola! Vengo de la promoción ${utmData.utmCampaign || "en redes sociales"}`
-      );
-      const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}?text=${whatsappMessage}`;
-
-      logger.info("Showing redirect page:", { clickId: clickRecord.id });
-
-      // Personalizar mensaje según campaña
-      let pageMessage = "¡Hablemos!";
-      let pageDescription = "Toca el botón para abrir WhatsApp y comenzar la conversación";
-
-      if (utmData.utmCampaign) {
-        if (utmData.utmCampaign.includes("promo")) {
-          pageMessage = "¡Aprovecha la promoción!";
-          pageDescription = "Toca el botón para consultar disponibilidad en WhatsApp";
-        } else if (utmData.utmCampaign.includes("cotizacion")) {
-          pageMessage = "¡Solicita tu cotización!";
-          pageDescription = "Toca el botón para recibir tu cotización personalizada";
+    // Crear lead en Kommo
+    if (shouldCreateKommoLead) {
+      logger.info("Creating Kommo lead for new user");
+      this._createKommoLeadAsync(clickRecord.id, phoneNumber, utmData).catch(
+        (error) => {
+          logger.error("Background Kommo lead creation failed:", error);
         }
-      }
+      );
+    } else {
+      logger.info("Meta verification - skipping Kommo");
+    }
 
-      // Leer y personalizar HTML
-      const htmlPath = path.join(__dirname, "../views/redirect.html");
-      let html = await fs.readFile(htmlPath, "utf-8");
+    // Construir URL de WhatsApp
+    const whatsappMessage = encodeURIComponent(
+      `Hola! Vengo de la promoción ${utmData.utmCampaign || "en redes sociales"}`
+    );
+    const whatsappUrl = `${process.env.WHATSAPP_BASE_URL}/${phoneNumber}?text=${whatsappMessage}`;
 
-      html = html.replace("{{WHATSAPP_URL}}", whatsappUrl);
-      html = html.replace("{{MESSAGE}}", pageMessage);
-      html = html.replace("{{DESCRIPTION}}", pageDescription);
+    logger.info("Showing redirect page:", { clickId: clickRecord.id });
 
-      return res.send(html);
-    } catch (error) {
-      logger.error("Error in redirect handler:", error);
+    // Personalizar mensaje según campaña
+    let pageMessage = "¡Hablemos!";
+    let pageDescription = "Toca el botón para abrir WhatsApp y comenzar la conversación";
 
-      const fallbackMessage = encodeURIComponent("Hola!");
-      const fallbackUrl = `${process.env.WHATSAPP_BASE_URL}/${sanitizePhone(phone)}?text=${fallbackMessage}`;
-
-      try {
-        const htmlPath = path.join(__dirname, "../views/redirect.html");
-        let html = await fs.readFile(htmlPath, "utf-8");
-        html = html.replace("{{WHATSAPP_URL}}", fallbackUrl);
-        html = html.replace("{{MESSAGE}}", "¡Hablemos!");
-        html = html.replace("{{DESCRIPTION}}", "Toca el botón para abrir WhatsApp");
-        return res.send(html);
-      } catch (htmlError) {
-        return res.redirect(301, fallbackUrl);
+    if (utmData.utmCampaign) {
+      if (utmData.utmCampaign.includes("promo")) {
+        pageMessage = "¡Aprovecha la promoción!";
+        pageDescription = "Toca el botón para consultar disponibilidad en WhatsApp";
+      } else if (utmData.utmCampaign.includes("cotizacion")) {
+        pageMessage = "¡Solicita tu cotización!";
+        pageDescription = "Toca el botón para recibir tu cotización personalizada";
       }
     }
+
+    // Leer y personalizar HTML
+    const htmlPath = path.join(__dirname, "../views/redirect.html");
+    let html = await fs.readFile(htmlPath, "utf-8");
+
+    html = html.replace("{{WHATSAPP_URL}}", whatsappUrl);
+    html = html.replace("{{MESSAGE}}", pageMessage);
+    html = html.replace("{{DESCRIPTION}}", pageDescription);
+
+    return res.send(html);
+  } catch (error) {
+    logger.error("Error in redirect handler:", error);
+
+    const fallbackMessage = encodeURIComponent("Hola!");
+    const fallbackUrl = `${process.env.WHATSAPP_BASE_URL}/${sanitizePhone(phone)}?text=${fallbackMessage}`;
+
+    try {
+      const htmlPath = path.join(__dirname, "../views/redirect.html");
+      let html = await fs.readFile(htmlPath, "utf-8");
+      html = html.replace("{{WHATSAPP_URL}}", fallbackUrl);
+      html = html.replace("{{MESSAGE}}", "¡Hablemos!");
+      html = html.replace("{{DESCRIPTION}}", "Toca el botón para abrir WhatsApp");
+      return res.send(html);
+    } catch (htmlError) {
+      return res.redirect(301, fallbackUrl);
+    }
   }
+}
 
   /**
    * Crear lead en Kommo de forma asíncrona
