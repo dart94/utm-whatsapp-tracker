@@ -1,7 +1,5 @@
 const { prisma } = require("../config/database");
-const kommoService = require("../services/kommoService");
 const logger = require("../utils/logger");
-const { createResponse } = require("../utils/helpers");
 
 class WebhookController {
   /**
@@ -12,25 +10,19 @@ class WebhookController {
       logger.info("=== KOMMO WEBHOOK RECEIVED ===");
       logger.info(JSON.stringify(req.body, null, 2));
 
-      // El payload de "mensaje entrante" viene en este formato:
-      const { message, account } = req.body;
+      const { message } = req.body;
 
       if (!message) {
         logger.warn("No message in webhook payload");
         return res.json({ success: true, message: "No message to process" });
       }
 
-      const {
-        contact_id,
-        conversation_id,
-        sender,
-        created_at,
-      } = message;
+      const { contact_id } = message;
 
       logger.info(`New message from contact: ${contact_id}`);
 
-      // Obtener info del contacto para sacar el número
-      const contactInfo = await this._getContactInfo(contact_id);
+      // Obtener info del contacto
+      const contactInfo = await this.getContactInfo(contact_id);
       
       if (!contactInfo || !contactInfo.phoneNumber) {
         logger.warn(`No phone number found for contact ${contact_id}`);
@@ -63,7 +55,7 @@ class WebhookController {
       logger.info(`Found matching click: ${recentClick.id}`);
 
       // Obtener el lead asociado al contacto
-      const leadId = await this._getLeadFromContact(contact_id);
+      const leadId = await this.getLeadFromContact(contact_id);
 
       if (!leadId) {
         logger.warn(`No lead found for contact ${contact_id}`);
@@ -73,7 +65,7 @@ class WebhookController {
       logger.info(`Lead ID: ${leadId}`);
 
       // Actualizar lead en Kommo con UTMs
-      const success = await this._updateLeadWithUTMs(leadId, recentClick);
+      const success = await this.updateLeadWithUTMs(leadId, recentClick);
 
       if (success) {
         // Vincular click con lead
@@ -91,7 +83,6 @@ class WebhookController {
       return res.json({ success: true });
     } catch (error) {
       logger.error("Error in Kommo webhook:", error);
-      // Siempre responder 200 a Kommo para que no reintente
       return res.json({ success: false, error: error.message });
     }
   }
@@ -99,7 +90,7 @@ class WebhookController {
   /**
    * Obtener información del contacto
    */
-  async _getContactInfo(contactId) {
+  async getContactInfo(contactId) {
     try {
       const kommoConfig = require("../config/kommo");
       const client = kommoConfig.getClient();
@@ -107,7 +98,6 @@ class WebhookController {
       const response = await client.get(`/contacts/${contactId}`);
       const contact = response.data;
 
-      // Buscar el campo de teléfono
       const phoneField = contact.custom_fields_values?.find(
         (f) => f.field_code === "PHONE"
       );
@@ -128,12 +118,11 @@ class WebhookController {
   /**
    * Obtener lead asociado a un contacto
    */
-  async _getLeadFromContact(contactId) {
+  async getLeadFromContact(contactId) {
     try {
       const kommoConfig = require("../config/kommo");
       const client = kommoConfig.getClient();
 
-      // Buscar leads del contacto
       const response = await client.get("/leads", {
         params: {
           filter: {
@@ -162,7 +151,7 @@ class WebhookController {
   /**
    * Actualizar lead de Kommo con datos UTM
    */
-  async _updateLeadWithUTMs(leadId, clickData) {
+  async updateLeadWithUTMs(leadId, clickData) {
     try {
       const kommoConfig = require("../config/kommo");
       const client = kommoConfig.getClient();
@@ -170,7 +159,6 @@ class WebhookController {
 
       const customFields = [];
 
-      // Agregar todos los campos UTM
       if (fields.utmSource) {
         customFields.push({
           field_id: parseInt(fields.utmSource, 10),
@@ -226,12 +214,10 @@ class WebhookController {
 
       logger.info(`Updating lead ${leadId} with ${customFields.length} custom fields`);
 
-      // Actualizar el lead
       await client.patch(`/leads/${leadId}`, {
         custom_fields_values: customFields,
       });
 
-      // Agregar tags si hay campaña
       if (clickData.utmCampaign) {
         await client.patch(`/leads/${leadId}`, {
           _embedded: {
