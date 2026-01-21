@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const webhookController = require("../controllers/webhookController");
 
-//
-router.post("/kommo", webhookController.handleKommoWebhook);
+// ✅ Sin .bind() porque ya es una instancia
+router.post("/", webhookController.handleKommoWebhook);
 
 module.exports = router;
