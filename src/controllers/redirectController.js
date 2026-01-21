@@ -148,7 +148,7 @@ async handleRedirect(req, res) {
     });
 
     // SIEMPRE crear lead en Kommo (excepto si es IP de Meta)
-    const shouldCreateKommoLead = !isMetaVerification;
+    const shouldCreateKommoLead = false;
 
     // Crear registro en BD
     const clickRecord = await prisma.click.create({
@@ -158,7 +158,7 @@ async handleRedirect(req, res) {
         ipAddress,
         userAgent,
         referer,
-        kommoStatus: isMetaVerification ? "skipped" : "pending",
+        kommoStatus: isMetaVerification ? "skipped" : "tracked",
       },
     });
 
