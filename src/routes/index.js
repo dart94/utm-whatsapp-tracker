@@ -9,7 +9,7 @@ const analyticsRoutes = require('./analyticsRoutes');
 const webhookRoutes = require('./webhookRoutes');
 
 // Montar ruta de webhook
-router.use('/webhook', webhookRoutes);
+router.use('/api/webhooks', webhookRoutes);
 
 /**
  * @openapi
