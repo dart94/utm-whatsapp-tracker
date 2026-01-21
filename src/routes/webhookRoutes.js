@@ -1,8 +1,8 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const webhookController = require('../controllers/webhookController');
+const webhookController = require("../controllers/webhookController");
 
-//webhook de kommo
-router.post('/kommo', webhookController.kommoWebhook.bind(webhookController));
+//
+router.post("/kommo", webhookController.handleKommoWebhook);
 
 module.exports = router;
