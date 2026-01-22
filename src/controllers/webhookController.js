@@ -10,12 +10,21 @@ class WebhookController {
       logger.info("=== KOMMO WEBHOOK RECEIVED ===");
       logger.info(JSON.stringify(req.body, null, 2));
 
-      // El payload real tiene contact_id y element_id/entity_id en el root
-      const { contact_id, element_id, entity_id } = req.body;
+      // El payload tiene un array message.add con los mensajes
+      const { message } = req.body;
+
+      if (!message || !message.add || message.add.length === 0) {
+        logger.warn("No messages in webhook payload");
+        return res.json({ success: true, message: "No messages to process" });
+      }
+
+      // Obtener el primer mensaje
+      const firstMessage = message.add[0];
+      const { contact_id, element_id, entity_id } = firstMessage;
 
       if (!contact_id) {
-        logger.warn("No contact_id in webhook payload");
-        return res.json({ success: true, message: "No contact_id to process" });
+        logger.warn("No contact_id in message");
+        return res.json({ success: true });
       }
 
       logger.info(`New message from contact: ${contact_id}`);
@@ -24,7 +33,7 @@ class WebhookController {
       const leadId = element_id || entity_id;
 
       if (!leadId) {
-        logger.warn(`No lead ID found in webhook`);
+        logger.warn(`No lead ID found in message`);
         return res.json({ success: true });
       }
 
@@ -54,7 +63,7 @@ class WebhookController {
 
       logger.info(`Found matching click: ${recentClick.id}`);
       logger.info(`Click campaign: ${recentClick.utmCampaign}`);
-      logger.info(`Click created: ${recentClick.createdAt}`);
+      logger.info(`Click fbclid: ${recentClick.fbclid}`);
 
       // Actualizar lead en Kommo con UTMs
       const success = await this.updateLeadWithUTMs(leadId, recentClick);
@@ -69,7 +78,7 @@ class WebhookController {
           },
         });
 
-        logger.info(`✅ Lead ${leadId} updated with UTMs from click ${recentClick.id}`);
+        logger.info(`✅ SUCCESS! Lead ${leadId} updated with UTMs from click ${recentClick.id}`);
       } else {
         logger.error(`Failed to update lead ${leadId} with UTMs`);
       }
@@ -161,7 +170,7 @@ class WebhookController {
         logger.info(`✅ Tag added: ${clickData.utmCampaign}`);
       }
 
-      logger.info(`✅ Lead ${leadId} updated successfully`);
+      logger.info(`✅ Lead ${leadId} fully updated`);
       return true;
     } catch (error) {
       logger.error(`Error updating lead ${leadId}:`, error);
