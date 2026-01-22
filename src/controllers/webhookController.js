@@ -5,7 +5,7 @@ class WebhookController {
   /**
    * Manejar webhook de Kommo cuando llega mensaje entrante
    */
-  async handleKommoWebhook(req, res) {
+  handleKommoWebhook = async (req, res) => {
     try {
       logger.info("=== KOMMO WEBHOOK RECEIVED ===");
       logger.info(JSON.stringify(req.body, null, 2));
@@ -31,7 +31,7 @@ class WebhookController {
 
       logger.info(`Contact phone: ${contactInfo.phoneNumber}`);
 
-      // Buscar click reciente (últimos 15 minutos) sin lead asignado
+      // Buscar click reciente
       const fifteenMinutesAgo = new Date(Date.now() - 900000);
       
       const recentClick = await prisma.click.findFirst({
@@ -54,7 +54,7 @@ class WebhookController {
 
       logger.info(`Found matching click: ${recentClick.id}`);
 
-      // Obtener el lead asociado al contacto
+      // Obtener lead asociado
       const leadId = await this.getLeadFromContact(contact_id);
 
       if (!leadId) {
@@ -64,11 +64,10 @@ class WebhookController {
 
       logger.info(`Lead ID: ${leadId}`);
 
-      // Actualizar lead en Kommo con UTMs
+      // Actualizar lead con UTMs
       const success = await this.updateLeadWithUTMs(leadId, recentClick);
 
       if (success) {
-        // Vincular click con lead
         await prisma.click.update({
           where: { id: recentClick.id },
           data: {
@@ -85,12 +84,9 @@ class WebhookController {
       logger.error("Error in Kommo webhook:", error);
       return res.json({ success: false, error: error.message });
     }
-  }
+  };
 
-  /**
-   * Obtener información del contacto
-   */
-  async getContactInfo(contactId) {
+  getContactInfo = async (contactId) => {
     try {
       const kommoConfig = require("../config/kommo");
       const client = kommoConfig.getClient();
@@ -113,12 +109,9 @@ class WebhookController {
       logger.error(`Error getting contact ${contactId}:`, error);
       return null;
     }
-  }
+  };
 
-  /**
-   * Obtener lead asociado a un contacto
-   */
-  async getLeadFromContact(contactId) {
+  getLeadFromContact = async (contactId) => {
     try {
       const kommoConfig = require("../config/kommo");
       const client = kommoConfig.getClient();
@@ -146,12 +139,9 @@ class WebhookController {
       logger.error(`Error getting lead for contact ${contactId}:`, error);
       return null;
     }
-  }
+  };
 
-  /**
-   * Actualizar lead de Kommo con datos UTM
-   */
-  async updateLeadWithUTMs(leadId, clickData) {
+  updateLeadWithUTMs = async (leadId, clickData) => {
     try {
       const kommoConfig = require("../config/kommo");
       const client = kommoConfig.getClient();
@@ -236,7 +226,7 @@ class WebhookController {
       }
       return false;
     }
-  }
+  };
 }
 
 module.exports = new WebhookController();
