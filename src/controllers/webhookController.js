@@ -10,28 +10,27 @@ class WebhookController {
       logger.info("=== KOMMO WEBHOOK RECEIVED ===");
       logger.info(JSON.stringify(req.body, null, 2));
 
-      const { message } = req.body;
+      // El payload real tiene contact_id y element_id/entity_id en el root
+      const { contact_id, element_id, entity_id } = req.body;
 
-      if (!message) {
-        logger.warn("No message in webhook payload");
-        return res.json({ success: true, message: "No message to process" });
+      if (!contact_id) {
+        logger.warn("No contact_id in webhook payload");
+        return res.json({ success: true, message: "No contact_id to process" });
       }
-
-      const { contact_id } = message;
 
       logger.info(`New message from contact: ${contact_id}`);
 
-      // Obtener info del contacto
-      const contactInfo = await this.getContactInfo(contact_id);
-      
-      if (!contactInfo || !contactInfo.phoneNumber) {
-        logger.warn(`No phone number found for contact ${contact_id}`);
+      // El lead ID viene en element_id o entity_id
+      const leadId = element_id || entity_id;
+
+      if (!leadId) {
+        logger.warn(`No lead ID found in webhook`);
         return res.json({ success: true });
       }
 
-      logger.info(`Contact phone: ${contactInfo.phoneNumber}`);
+      logger.info(`Lead ID from webhook: ${leadId}`);
 
-      // Buscar click reciente
+      // Buscar click reciente (últimos 15 minutos) sin lead asignado
       const fifteenMinutesAgo = new Date(Date.now() - 900000);
       
       const recentClick = await prisma.click.findFirst({
@@ -48,26 +47,20 @@ class WebhookController {
       });
 
       if (!recentClick) {
-        logger.warn(`No recent click found for contact ${contact_id}`);
+        logger.warn(`No recent click found (last 15 min)`);
+        logger.info(`This is OK if user didn't click ad before messaging`);
         return res.json({ success: true });
       }
 
       logger.info(`Found matching click: ${recentClick.id}`);
+      logger.info(`Click campaign: ${recentClick.utmCampaign}`);
+      logger.info(`Click created: ${recentClick.createdAt}`);
 
-      // Obtener lead asociado
-      const leadId = await this.getLeadFromContact(contact_id);
-
-      if (!leadId) {
-        logger.warn(`No lead found for contact ${contact_id}`);
-        return res.json({ success: true });
-      }
-
-      logger.info(`Lead ID: ${leadId}`);
-
-      // Actualizar lead con UTMs
+      // Actualizar lead en Kommo con UTMs
       const success = await this.updateLeadWithUTMs(leadId, recentClick);
 
       if (success) {
+        // Vincular click con lead
         await prisma.click.update({
           where: { id: recentClick.id },
           data: {
@@ -77,67 +70,14 @@ class WebhookController {
         });
 
         logger.info(`✅ Lead ${leadId} updated with UTMs from click ${recentClick.id}`);
+      } else {
+        logger.error(`Failed to update lead ${leadId} with UTMs`);
       }
 
       return res.json({ success: true });
     } catch (error) {
       logger.error("Error in Kommo webhook:", error);
       return res.json({ success: false, error: error.message });
-    }
-  };
-
-  getContactInfo = async (contactId) => {
-    try {
-      const kommoConfig = require("../config/kommo");
-      const client = kommoConfig.getClient();
-
-      const response = await client.get(`/contacts/${contactId}`);
-      const contact = response.data;
-
-      const phoneField = contact.custom_fields_values?.find(
-        (f) => f.field_code === "PHONE"
-      );
-
-      const phoneNumber = phoneField?.values?.[0]?.value;
-
-      return {
-        id: contact.id,
-        name: contact.name,
-        phoneNumber: phoneNumber,
-      };
-    } catch (error) {
-      logger.error(`Error getting contact ${contactId}:`, error);
-      return null;
-    }
-  };
-
-  getLeadFromContact = async (contactId) => {
-    try {
-      const kommoConfig = require("../config/kommo");
-      const client = kommoConfig.getClient();
-
-      const response = await client.get("/leads", {
-        params: {
-          filter: {
-            contact_id: contactId,
-          },
-          limit: 1,
-          order: {
-            created_at: "desc",
-          },
-        },
-      });
-
-      const leads = response.data._embedded?.leads;
-      
-      if (leads && leads.length > 0) {
-        return leads[0].id;
-      }
-
-      return null;
-    } catch (error) {
-      logger.error(`Error getting lead for contact ${contactId}:`, error);
-      return null;
     }
   };
 
@@ -204,17 +144,21 @@ class WebhookController {
 
       logger.info(`Updating lead ${leadId} with ${customFields.length} custom fields`);
 
+      // Actualizar campos custom
       await client.patch(`/leads/${leadId}`, {
         custom_fields_values: customFields,
       });
 
+      logger.info(`✅ Custom fields updated on lead ${leadId}`);
+
+      // Agregar tag si hay campaña
       if (clickData.utmCampaign) {
         await client.patch(`/leads/${leadId}`, {
           _embedded: {
             tags: [{ name: clickData.utmCampaign }],
           },
         });
-        logger.info(`Added tag: ${clickData.utmCampaign}`);
+        logger.info(`✅ Tag added: ${clickData.utmCampaign}`);
       }
 
       logger.info(`✅ Lead ${leadId} updated successfully`);
@@ -222,6 +166,7 @@ class WebhookController {
     } catch (error) {
       logger.error(`Error updating lead ${leadId}:`, error);
       if (error.response) {
+        logger.error("Response status:", error.response.status);
         logger.error("Response data:", JSON.stringify(error.response.data));
       }
       return false;
